@@ -20,9 +20,10 @@
     #writer textarea { width: 400px; font-size: 16px; }
 
     /* 메모가 붙는 담벼락 */
-    #wall { display: flex; flex-wrap: wrap; gap: 10px; }
-    .memo { border: 1px solid #ddd; background: #fffde7; padding: 10px; width: 200px; font-size: 15px; }
-    .memo button { float: right; }
+    #wall { display: flex; flex-wrap: wrap; gap: 12px; }
+    .memo { border: 1px solid #ddd; background: #fffde7; padding: 12px; width: 220px; font-size: 15px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); word-break: break-word; }
+    .memo .del-btn { float: right; cursor: pointer; background: transparent; border: none; font-size: 16px; font-weight: bold; color: #888; }
+    .memo .del-btn:hover { color: #d32f2f; }
   </style>
 </head>
 <body>

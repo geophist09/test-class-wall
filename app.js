@@ -7,6 +7,7 @@ import {
   collection,
   addDoc,
   deleteDoc,
+  updateDoc,
   doc,
   getDoc,
   setDoc,
@@ -123,6 +124,7 @@ function makeMemo(memo) {
 
   // 삭제 버튼: 교사(teacher)만 삭제 가능
   const del = document.createElement("button");
+  del.className = "del-btn";
   del.textContent = "×";
   del.title = currentUserRole === "teacher" ? "메모 삭제" : "교사만 삭제할 수 있습니다";
   del.addEventListener("click", function () {
@@ -146,6 +148,45 @@ function makeMemo(memo) {
     authorDiv.style.marginTop = "8px";
     authorDiv.textContent = `작성자: ${memo.author}`;
     div.appendChild(authorDiv);
+  }
+
+  // AI 코멘트가 있는 경우 표시합니다.
+  if (memo.aiComment) {
+    const aiBox = document.createElement("div");
+    aiBox.className = "ai-comment";
+    aiBox.style.marginTop = "8px";
+    aiBox.style.padding = "6px 8px";
+    aiBox.style.background = "#eef7ff";
+    aiBox.style.borderLeft = "3px solid #1a73e8";
+    aiBox.style.borderRadius = "4px";
+    aiBox.style.fontSize = "12px";
+    aiBox.style.color = "#174ea6";
+    aiBox.style.lineHeight = "1.4";
+    aiBox.innerHTML = `<strong>🤖 AI 코멘트:</strong><br>${memo.aiComment}`;
+    div.appendChild(aiBox);
+  }
+
+  // 교사(teacher)에게만 AI 코멘트 생성 버튼 노출
+  if (currentUserRole === "teacher") {
+    const aiBtn = document.createElement("button");
+    aiBtn.textContent = memo.aiComment ? "🤖 AI 코멘트 다시받기" : "🤖 AI 코멘트 받기";
+    aiBtn.style.marginTop = "8px";
+    aiBtn.style.padding = "3px 6px";
+    aiBtn.style.fontSize = "12px";
+    aiBtn.style.cursor = "pointer";
+    aiBtn.style.borderRadius = "3px";
+    aiBtn.style.border = "1px solid #1a73e8";
+    aiBtn.style.background = "#fff";
+    aiBtn.style.color = "#1a73e8";
+
+    aiBtn.addEventListener("click", async function () {
+      aiBtn.disabled = true;
+      aiBtn.textContent = "생성 중...";
+      await requestAiComment(memo.id, memo.text);
+      aiBtn.disabled = false;
+      aiBtn.textContent = "🤖 AI 코멘트 다시받기";
+    });
+    div.appendChild(aiBtn);
   }
 
   return div;
@@ -233,7 +274,7 @@ function renderUserArea() {
   if (!userArea) return;
 
   if (currentUser) {
-    // 로그인된 상태: 사용자 이름, 역할 선택, 로그아웃 버튼 표시
+    // 로그인된 상태: 사용자 이름, 역할 선택, 일괄 AI 버튼(교사용), 로그아웃 버튼 표시
     userArea.innerHTML = `
       <span>👋 <strong>${currentUser.displayName || "사용자"}</strong>님</span>
       <span style="margin-left: 8px;">
@@ -243,12 +284,20 @@ function renderUserArea() {
           <option value="teacher" ${currentUserRole === "teacher" ? "selected" : ""}>교사 (teacher)</option>
         </select>
       </span>
+      ${
+        currentUserRole === "teacher"
+          ? `<button id="batchAiBtn" style="margin-left: 8px; padding: 3px 8px; cursor: pointer; background: #e8f0fe; color: #1a73e8; border: 1px solid #1a73e8; border-radius: 4px; font-size: 13px;">🤖 전체 AI 코멘트 달기</button>`
+          : ""
+      }
       <button id="logoutBtn" style="margin-left: 8px; cursor: pointer;">로그아웃</button>
     `;
 
     document.getElementById("roleSelect").addEventListener("change", function (e) {
       changeUserRole(e.target.value);
     });
+    if (currentUserRole === "teacher") {
+      document.getElementById("batchAiBtn").addEventListener("click", requestAiCommentsForAll);
+    }
     document.getElementById("logoutBtn").addEventListener("click", handleLogout);
   } else {
     // 로그아웃된 상태: 구글 로그인 버튼 표시
@@ -280,5 +329,71 @@ async function handleLogout() {
   } catch (error) {
     console.error("로그아웃 중 오류가 발생했습니다:", error);
   }
+}
+
+
+// ===================================================
+// AI 코멘트 (Gemini API 연동)
+// ===================================================
+
+// 특정 메모에 대한 AI 코멘트 요청 및 Firestore 저장
+async function requestAiComment(memoId, text) {
+  try {
+    const response = await fetch("/api/gemini", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ text: text })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `서버 오류 (HTTP ${response.status})`);
+    }
+
+    const result = await response.json();
+    if (result.comment) {
+      await updateDoc(doc(db, "memos", memoId), {
+        aiComment: result.comment,
+        aiCommentedAt: Date.now()
+      });
+    }
+  } catch (error) {
+    console.error("AI 코멘트 요청 실패:", error);
+    alert("AI 코멘트를 가져오지 못했습니다: " + error.message);
+  }
+}
+
+// 담벼락의 모든 메모에 대해 AI 코멘트 일괄 요청
+async function requestAiCommentsForAll() {
+  const targetMemos = memos.filter(function (m) {
+    return !m.aiComment;
+  });
+
+  if (targetMemos.length === 0) {
+    alert("담벼락의 모든 메모에 이미 AI 코멘트가 작성되어 있습니다.");
+    return;
+  }
+
+  const batchBtn = document.getElementById("batchAiBtn");
+  if (batchBtn) {
+    batchBtn.disabled = true;
+    batchBtn.textContent = `생성 중... (0/${targetMemos.length})`;
+  }
+
+  for (let i = 0; i < targetMemos.length; i++) {
+    const memo = targetMemos[i];
+    await requestAiComment(memo.id, memo.text);
+    if (batchBtn) {
+      batchBtn.textContent = `생성 중... (${i + 1}/${targetMemos.length})`;
+    }
+  }
+
+  if (batchBtn) {
+    batchBtn.disabled = false;
+    batchBtn.textContent = "🤖 전체 AI 코멘트 달기";
+  }
+  alert("모든 메모에 AI 코멘트 작성이 완료되었습니다!");
 }
 
