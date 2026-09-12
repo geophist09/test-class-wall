@@ -2,15 +2,52 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ===================================================
+    // 사용자 역할 확인 함수
+    // ===================================================
+
+    // 교사(teacher)인지 확인: users 컬렉션의 role 필드가 'teacher'인지 검사
+    function isTeacher() {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+
+    // ===================================================
+    // 사용자(users) 컬렉션 규칙
+    // ===================================================
+    match /users/{userId} {
+      // 로그인한 사용자는 사용자의 역할 정보를 조회할 수 있습니다.
+      allow read: if request.auth != null;
+      // 본인의 역할(교사/학생) 정보만 등록 및 수정할 수 있습니다.
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // ===================================================
+    // 메모(memos) 컬렉션 규칙
+    // ===================================================
     match /memos/{memoId} {
-      // 누구나 읽을 수 있습니다.
+      // 담벼락 메모는 누구나 읽을 수 있습니다.
       allow read: if true;
 
-      // 5글자 이상일 때만 새 메모 작성 및 수정을 허용합니다.
-      allow create, update: if request.resource.data.text is string && request.resource.data.text.size() >= 5;
+      // 메모 생성:
+      // 1) 교사(teacher): 5글자 이상이면 모든 메모 생성 가능
+      // 2) 학생(student): 본인의 uid가 기록된 5글자 이상의 메모만 생성 가능
+      allow create: if request.auth != null && (
+        (isTeacher() && request.resource.data.text is string && request.resource.data.text.size() >= 5) ||
+        (
+          request.resource.data.uid == request.auth.uid &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() >= 5
+        )
+      );
 
-      // 메모 삭제를 허용합니다.
-      allow delete: if true;
+      // 메모 수정: 교사(teacher)만 가능 (학생은 수정 불가)
+      allow update: if isTeacher();
+
+      // 메모 삭제: 교사(teacher)만 가능 (학생은 다른 사람 것은 물론 본인 메모도 삭제 불가)
+      allow delete: if isTeacher();
     }
   }
 }

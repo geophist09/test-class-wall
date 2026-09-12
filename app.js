@@ -8,6 +8,8 @@ import {
   addDoc,
   deleteDoc,
   doc,
+  getDoc,
+  setDoc,
   query,
   orderBy,
   onSnapshot
@@ -38,6 +40,8 @@ const provider = new GoogleAuthProvider();
 
 // 현재 로그인한 사용자 정보 (로그아웃 시 null)
 let currentUser = null;
+// 현재 사용자의 역할 ('teacher' 또는 'student')
+let currentUserRole = "student";
 
 // --- 메모 목록 ---
 // Firestore에서 실시간으로 가져온 메모들이 여기에 담깁니다.
@@ -68,19 +72,22 @@ function loadMemos() {
 // 메모를 새로 씁니다.
 // Firestore memos 컬렉션에 새 문서를 추가합니다.
 async function addMemo(text) {
+  if (!currentUser) {
+    alert("로그인 후 메모를 작성할 수 있습니다.");
+    return;
+  }
+
   try {
     const memoData = {
       text: text,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      uid: currentUser.uid,
+      author: currentUser.displayName || (currentUserRole === "teacher" ? "선생님" : "학생")
     };
-    // 로그인된 상태라면 작성자 정보도 함께 저장합니다.
-    if (currentUser) {
-      memoData.uid = currentUser.uid;
-      memoData.author = currentUser.displayName || "선생님";
-    }
     await addDoc(collection(db, "memos"), memoData);
   } catch (error) {
     console.error("메모 저장 중 오류가 발생했습니다:", error);
+    alert("메모 저장에 실패했습니다. (5글자 이상 입력했는지 확인해 주세요)");
   }
 }
 
@@ -91,6 +98,7 @@ async function deleteMemo(id) {
     await deleteDoc(doc(db, "memos", id));
   } catch (error) {
     console.error("메모 삭제 중 오류가 발생했습니다:", error);
+    alert("메모를 삭제할 권한이 없습니다. (교사만 삭제할 수 있습니다)");
   }
 }
 
@@ -113,9 +121,15 @@ function makeMemo(memo) {
   const div = document.createElement("div");
   div.className = "memo";
 
+  // 삭제 버튼: 교사(teacher)만 삭제 가능
   const del = document.createElement("button");
   del.textContent = "×";
+  del.title = currentUserRole === "teacher" ? "메모 삭제" : "교사만 삭제할 수 있습니다";
   del.addEventListener("click", function () {
+    if (currentUserRole !== "teacher") {
+      alert("삭제 권한이 없습니다. 교사(teacher)만 메모를 삭제할 수 있습니다.");
+      return;
+    }
     deleteMemo(memo.id);
   });
   div.appendChild(del);
@@ -164,27 +178,77 @@ input.focus();
 
 
 // ===================================================
-// 구글 로그인 및 인증 상태 관리
+// 구글 로그인 및 사용자 역할(교사/학생) 관리
 // ===================================================
 
 const userArea = document.getElementById("userArea");
 
 // 로그인 상태 변경 감시 (로그인 / 로그아웃 시 자동 실행)
-onAuthStateChanged(auth, function (user) {
+onAuthStateChanged(auth, async function (user) {
   currentUser = user;
+  if (currentUser) {
+    // Firestore users 컬렉션에서 사용자 역할(교사/학생) 조회
+    await loadUserRole(currentUser.uid);
+  } else {
+    currentUserRole = "student";
+  }
   renderUserArea();
+  render(); // 역할 변경에 따른 화면 갱신
 });
+
+// 사용자 역할(teacher/student) 불러오기
+async function loadUserRole(uid) {
+  try {
+    const userRef = doc(db, "users", uid);
+    const snap = await getDoc(userRef);
+    if (snap.exists()) {
+      currentUserRole = snap.data().role || "student";
+    } else {
+      // 신규 사용자는 기본값 student로 등록 (UI에서 변경 가능)
+      currentUserRole = "student";
+      await setDoc(userRef, { role: "student" });
+    }
+  } catch (error) {
+    console.error("역할 정보 조회 실패:", error);
+    currentUserRole = "student";
+  }
+}
+
+// 사용자 역할 변경 (UI에서 교사/학생 전환 시)
+async function changeUserRole(newRole) {
+  if (!currentUser) return;
+  currentUserRole = newRole;
+  try {
+    const userRef = doc(db, "users", currentUser.uid);
+    await setDoc(userRef, { role: newRole }, { merge: true });
+  } catch (error) {
+    console.error("역할 변경 저장 실패:", error);
+  }
+  renderUserArea();
+  render();
+}
 
 // 로그인 영역(userArea) 화면 그리기
 function renderUserArea() {
   if (!userArea) return;
 
   if (currentUser) {
-    // 로그인된 상태: 사용자 이름과 로그아웃 버튼 표시
+    // 로그인된 상태: 사용자 이름, 역할 선택, 로그아웃 버튼 표시
     userArea.innerHTML = `
-      <span>👋 <strong>${currentUser.displayName || "선생님"}</strong>님 환영합니다!</span>
+      <span>👋 <strong>${currentUser.displayName || "사용자"}</strong>님</span>
+      <span style="margin-left: 8px;">
+        역할:
+        <select id="roleSelect" style="padding: 3px 6px; font-size: 13px;">
+          <option value="student" ${currentUserRole === "student" ? "selected" : ""}>학생 (student)</option>
+          <option value="teacher" ${currentUserRole === "teacher" ? "selected" : ""}>교사 (teacher)</option>
+        </select>
+      </span>
       <button id="logoutBtn" style="margin-left: 8px; cursor: pointer;">로그아웃</button>
     `;
+
+    document.getElementById("roleSelect").addEventListener("change", function (e) {
+      changeUserRole(e.target.value);
+    });
     document.getElementById("logoutBtn").addEventListener("click", handleLogout);
   } else {
     // 로그아웃된 상태: 구글 로그인 버튼 표시
